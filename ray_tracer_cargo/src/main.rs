@@ -106,7 +106,7 @@ impl Add for Vec3{
     type Output = Self;
 
     fn add(self,other: Self)->Self{
-        Vec3 {e: [(self.e[0]+other.e[0]), (self.e[1]+other.e[1]), (-self.e[2]+other.e[2])]}
+        Vec3 {e: [(self.e[0]+other.e[0]), (self.e[1]+other.e[1]), (self.e[2]+other.e[2])]}
     }
 }
 
@@ -122,7 +122,7 @@ impl Sub for Vec3{
     type Output = Self;
 
     fn sub(self,other: Self)->Self{
-        Vec3 {e: [(self.e[0]-other.e[0]), (self.e[1]-other.e[1]), (-self.e[2]-other.e[2])]}
+        Vec3 {e: [(self.e[0]-other.e[0]), (self.e[1]-other.e[1]), (self.e[2]-other.e[2])]}
     }
 }
 
@@ -134,19 +134,19 @@ impl Sub for Vec3{
 //     }
 // }
 
-impl Div for Vec3{
-    type Output = Self;
+// impl Div for Vec3{
+//     type Output = Self;
 
-    fn div(self,other: Self)->Self{
-        Vec3 {e: [(self.e[0]+other.e[0]), (self.e[1]+other.e[1]), (-self.e[2]+other.e[2])]}
-    }
-}
+//     fn div(self,other: Self)->Self{
+//         Vec3 {e: [(self.e[0]+other.e[0]), (self.e[1]+other.e[1]), (self.e[2]+other.e[2])]}
+//     }
+// }
 
 impl Mul for Vec3{
     type Output = Self;
 
     fn mul(self,other: Self)->Self{
-        Vec3 {e: [(self.e[0]*other.e[0]), (self.e[1]*other.e[1]), (-self.e[2]*other.e[2])]}
+        Vec3 {e: [(self.e[0]*other.e[0]), (self.e[1]*other.e[1]), (self.e[2]*other.e[2])]}
     }
 }
 
@@ -278,20 +278,22 @@ fn write_color(pixel_color: Color){
 fn ray_color(r:&Ray)->Color{
     let unit_direction = unit_vector(r.clone().direction());
     let a = 0.5*(unit_direction.y() + 1.0);
-    (1.0-a)*Color::filled_vector(1.0, 1.0, 1.0) + (a*Color::filled_vector(0.5, 0.7, 1.0))
+    ((1.0-a)*Color::filled_vector(1.0, 1.0, 1.0)) + (a*Color::filled_vector(0.5, 0.7, 1.0))
 }
 
 
 fn main(){
+    env_logger::init();
+
     let aspect_ratio = 16.0/9.0;
     let image_width = 400.0;
 
     let image_height = (image_width/aspect_ratio) as u32;
     let image_height = if image_height<1{1} else {image_height};
 
+
+
     let focal_length = 1.0;
-
-
 
     let viewport_height = 2.0;
     let viewport_width = viewport_height * (image_width/image_height as f32);
@@ -305,16 +307,17 @@ fn main(){
     let pixel_delta_u = viewport_u.clone()/image_width;
     let pixel_delta_v = viewport_v.clone()/image_height as f32;
 
-    let viewport_upper_left = camera_center.clone() - Vec3::filled_vector(0.0, 0.0, focal_length)-(viewport_u.clone()/2.0) - (viewport_v.clone()/2.0);
+    let viewport_upper_left = camera_center.clone() - Vec3::filled_vector(0.0, 0.0, focal_length) - (viewport_u.clone()/2.0) - (viewport_v.clone()/2.0);
 
     let pixel100_loc = viewport_upper_left.clone() + (0.5*(pixel_delta_u.clone()+pixel_delta_v.clone()));
 
+    
 
     //let height = 256;
     //let width = 256;
 
-    env_logger::init();
- 
+    
+    
     print!("P3\n{} {}\n255\n",image_width,image_height);
     
     for j in 0..image_height{
