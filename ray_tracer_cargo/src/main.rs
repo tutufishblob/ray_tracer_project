@@ -276,11 +276,102 @@ fn write_color(pixel_color: Color){
 
 
 fn ray_color(r:&Ray)->Color{
+    let t =  hit_sphere(&Point3::filled_vector(0.0, 0.0, -1.0), 0.5, r);
+    if t > 0.0 {
+        let n: Vec3 = unit_vector(r.clone().at(t)-Vec3::filled_vector(0.0, 0.0, -1.0));
+        return 0.5*Color::filled_vector(n.x()+1.0, n.y()+1.0, n.z()+1.0)
+    }
+
     let unit_direction = unit_vector(r.clone().direction());
     let a = 0.5*(unit_direction.y() + 1.0);
     ((1.0-a)*Color::filled_vector(1.0, 1.0, 1.0)) + (a*Color::filled_vector(0.5, 0.7, 1.0))
 }
 
+fn hit_sphere(center: &Point3,radius:f32, r: &Ray)->f32{
+    let oc = center.clone() - r.clone().origin();
+    let a = r.clone().direction().length_squared();
+    let h = dot_product(&r.clone().direction(), &oc);
+    let b = -2.0 * dot_product(&r.clone().direction(), &oc);
+    let c = oc.length_squared() - (radius*radius);
+
+    let discriminant = (b*b) - (4.0*a*c);
+
+    if discriminant < 0.0 {
+        -1.0
+    }
+    else{
+        (h-discriminant.sqrt())/a
+    }
+}
+
+struct HitRecord{
+    p:Point3,
+    normal:Vec3,
+    t:f32
+}
+
+impl Clone for HitRecord {
+    fn clone(&self) -> Self {
+        Self {
+            p: self.p.clone(),
+            normal:self.normal.clone(),
+            t:self.t.clone()
+        }
+    }
+}
+
+trait hittable{
+    fn hit(self, r:&Ray,tmin:f32,tmax:f32,rec:&mut HitRecord)->bool;
+}
+
+
+struct Sphere{
+    center: Point3,
+    radius:f32
+}
+
+impl Sphere{
+    pub fn new(center: &Point3,radius:f32)->Sphere{
+        Sphere{
+            center: center.clone(),
+            radius: if 0.0 >  radius {0.0} else {radius}
+        }
+    }
+}
+
+impl hittable for Sphere {
+    fn hit(self, r:&Ray,tmin:f32,tmax:f32,rec:&mut HitRecord)->bool {
+        let oc = self.center.clone() - r.clone().origin();
+        let a = r.clone().direction().length_squared();
+        let h = dot_product(&r.clone().direction(), &oc);
+        //let b = -2.0 * dot_product(&r.clone().direction(), &oc);
+        let c = oc.length_squared() - (self.radius*self.radius);
+
+        let discriminant = (h*h) - (a*c);
+
+        if discriminant < 0.0 {
+            return false
+        }
+        let sqrtd = discriminant.sqrt();
+
+        let mut root  = (h-sqrtd)/a;
+        if root<=tmin || tmax<=root {
+            root = (h+sqrtd)/a;
+
+            if root<=tmin || tmax<=root {
+                return false
+            }
+
+        }
+        
+        rec.t = root;
+        rec.p = r.clone().at(rec.t);
+        rec.normal = (rec.clone().p - self.center)/self.radius;
+
+        true
+
+    }
+}
 
 fn main(){
     env_logger::init();
