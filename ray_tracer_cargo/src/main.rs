@@ -307,7 +307,15 @@ fn hit_sphere(center: &Point3,radius:f32, r: &Ray)->f32{
 struct HitRecord{
     p:Point3,
     normal:Vec3,
-    t:f32
+    t:f32,
+    front_face:bool,
+}
+
+impl HitRecord {
+    pub fn set_face_normal(mut self, r: &Ray, outward_normal: Vec3){
+        self.front_face = if dot_product(&r.direction(), &outward_normal) < 0.0 {true} else{false};
+        self.normal = if self.front_face {outward_normal} else {-outward_normal};
+    }
 }
 
 impl Clone for HitRecord {
@@ -366,11 +374,17 @@ impl hittable for Sphere {
         
         rec.t = root;
         rec.p = r.clone().at(rec.t);
-        rec.normal = (rec.clone().p - self.center)/self.radius;
+        let outward_normal = (rec.clone().p - self.center)/self.radius;
+        rec.set_face_normal(r, outward_normal);
+
 
         true
 
     }
+}
+
+struct HittableList{
+    objects: Vec<hittable>,
 }
 
 fn main(){
