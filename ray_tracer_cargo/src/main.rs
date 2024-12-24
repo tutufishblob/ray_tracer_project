@@ -1,6 +1,8 @@
-use log::{info, ParseLevelError};
+use log::{info, set_boxed_logger, ParseLevelError};
 use std::ops::{Neg,AddAssign,MulAssign,DivAssign,Index,IndexMut,Add,Sub,Div,Mul,Deref,DerefMut};
 use std::fmt;
+use std::rc::Rc;
+
 //use std::env;
 //use std::fs;
 //use::std::str;
@@ -312,9 +314,18 @@ struct HitRecord{
 }
 
 impl HitRecord {
-    pub fn set_face_normal(mut self, r: &Ray, outward_normal: Vec3){
-        self.front_face = if dot_product(&r.direction(), &outward_normal) < 0.0 {true} else{false};
+    pub fn set_face_normal(&mut self, r: &Ray, outward_normal: Vec3){
+        self.front_face = if dot_product(&r.clone().direction(), &outward_normal) < 0.0 {true} else{false};
         self.normal = if self.front_face {outward_normal} else {-outward_normal};
+    }
+
+    pub fn default()->HitRecord{
+        HitRecord{
+        p:Point3::blank_vector(),
+        normal:Vec3::blank_vector(),
+        t:0.0,
+        front_face:false,
+        }
     }
 }
 
@@ -323,13 +334,14 @@ impl Clone for HitRecord {
         Self {
             p: self.p.clone(),
             normal:self.normal.clone(),
-            t:self.t.clone()
+            t:self.t.clone(),
+            front_face:self.front_face.clone()
         }
     }
 }
 
-trait hittable{
-    fn hit(self, r:&Ray,tmin:f32,tmax:f32,rec:&mut HitRecord)->bool;
+trait Hittable{
+    fn hit(&self, r:&Ray,tmin:f32,tmax:f32,rec:&mut HitRecord)->bool;
 }
 
 
@@ -347,8 +359,17 @@ impl Sphere{
     }
 }
 
-impl hittable for Sphere {
-    fn hit(self, r:&Ray,tmin:f32,tmax:f32,rec:&mut HitRecord)->bool {
+impl Clone for Sphere {
+    fn clone(&self) -> Self {
+        Self {
+            center:self.center.clone(),
+            radius:self.radius.clone()
+        }
+    }
+}
+
+impl Hittable for Sphere {
+    fn hit(&self, r:&Ray,tmin:f32,tmax:f32,rec:&mut HitRecord)->bool {
         let oc = self.center.clone() - r.clone().origin();
         let a = r.clone().direction().length_squared();
         let h = dot_product(&r.clone().direction(), &oc);
@@ -374,7 +395,7 @@ impl hittable for Sphere {
         
         rec.t = root;
         rec.p = r.clone().at(rec.t);
-        let outward_normal = (rec.clone().p - self.center)/self.radius;
+        let outward_normal = (rec.clone().p - self.center.clone())/self.radius;
         rec.set_face_normal(r, outward_normal);
 
 
@@ -384,7 +405,52 @@ impl hittable for Sphere {
 }
 
 struct HittableList{
-    objects: Vec<hittable>,
+    objects: Vec<Rc<dyn Hittable>>,
+}
+
+impl HittableList {
+    pub fn default()->HittableList{
+        HittableList{
+            objects: Vec::new(),
+        }
+    }
+
+    pub fn new(object: Rc<dyn Hittable>)->HittableList{
+        HittableList{
+            objects: vec![object],
+        }
+
+    }
+
+
+    pub fn clear(&mut self){
+        self.objects.clear();
+    }
+
+    pub fn add(&mut self, object: Rc<dyn Hittable>){
+        self.objects.push(object);
+    }
+
+    pub fn hit(&self, r:&Ray,tmin:f32,tmax:f32,rec:&mut HitRecord)->bool{
+        let mut temp_rec: HitRecord = HitRecord::default();
+        let mut hit_anything:bool = false;
+        let mut closest_so_far = tmax;
+
+        for object in &self.objects{
+            let object = object.as_ref();
+
+            
+            if object.hit(r,tmin,closest_so_far,&mut temp_rec){
+                hit_anything = true;
+                closest_so_far = temp_rec.t;
+                *rec = temp_rec.clone();
+            }
+        }
+
+        hit_anything
+
+    }
+
 }
 
 fn main(){
