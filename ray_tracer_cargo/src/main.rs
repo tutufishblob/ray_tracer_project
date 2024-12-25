@@ -10,6 +10,8 @@ use std::rc::Rc;
 //use std::io::*;
 
 
+const PI: f32 = 3.141592653589793;
+const INF: f32 = f32::INFINITY;
 struct Vec3{
     e: [f32; 3],
 
@@ -277,7 +279,13 @@ fn write_color(pixel_color: Color){
 }
 
 
-fn ray_color(r:&Ray)->Color{
+fn ray_color(r:&Ray,world:&HittableList)->Color{
+    let mut rec:HitRecord = HitRecord::default();
+    if world.hit(r, Interval{min:0.0, max:INF}, &mut rec){
+        return 0.5*(rec.normal+Color::filled_vector(1.0, 1.0, 1.0));
+    }
+
+
     let t =  hit_sphere(&Point3::filled_vector(0.0, 0.0, -1.0), 0.5, r);
     if t > 0.0 {
         let n: Vec3 = unit_vector(r.clone().at(t)-Vec3::filled_vector(0.0, 0.0, -1.0));
@@ -341,7 +349,7 @@ impl Clone for HitRecord {
 }
 
 trait Hittable{
-    fn hit(&self, r:&Ray,tmin:f32,tmax:f32,rec:&mut HitRecord)->bool;
+    fn hit(&self, r:&Ray,ray_t:Interval,rec:&mut HitRecord)->bool;
 }
 
 
@@ -369,7 +377,7 @@ impl Clone for Sphere {
 }
 
 impl Hittable for Sphere {
-    fn hit(&self, r:&Ray,tmin:f32,tmax:f32,rec:&mut HitRecord)->bool {
+    fn hit(&self, r:&Ray,ray_t:Interval,rec:&mut HitRecord)->bool {
         let oc = self.center.clone() - r.clone().origin();
         let a = r.clone().direction().length_squared();
         let h = dot_product(&r.clone().direction(), &oc);
@@ -384,10 +392,10 @@ impl Hittable for Sphere {
         let sqrtd = discriminant.sqrt();
 
         let mut root  = (h-sqrtd)/a;
-        if root<=tmin || tmax<=root {
+        if !ray_t.surrounds(&root) {
             root = (h+sqrtd)/a;
 
-            if root<=tmin || tmax<=root {
+            if !ray_t.surrounds(&root) {
                 return false
             }
 
@@ -431,16 +439,16 @@ impl HittableList {
         self.objects.push(object);
     }
 
-    pub fn hit(&self, r:&Ray,tmin:f32,tmax:f32,rec:&mut HitRecord)->bool{
+    pub fn hit(&self, r:&Ray,ray_t:Interval,rec:&mut HitRecord)->bool{
         let mut temp_rec: HitRecord = HitRecord::default();
         let mut hit_anything:bool = false;
-        let mut closest_so_far = tmax;
+        let mut closest_so_far = ray_t.max;
 
         for object in &self.objects{
             let object = object.as_ref();
 
             
-            if object.hit(r,tmin,closest_so_far,&mut temp_rec){
+            if object.hit(r,Interval{min:ray_t.min, max:closest_so_far},&mut temp_rec){
                 hit_anything = true;
                 closest_so_far = temp_rec.t;
                 *rec = temp_rec.clone();
@@ -453,6 +461,45 @@ impl HittableList {
 
 }
 
+struct Interval{
+    min:f32,
+    max:f32,
+}
+
+impl Interval{
+    pub fn default()->Interval{
+        Interval{
+            min:-INF,
+            max:INF,
+        }
+    }
+
+    pub fn new(min:f32, max:f32)->Interval{
+        Interval{
+            min: min,
+            max: max,
+        }
+    }
+
+    pub fn contains(self, x:&f32)->bool{
+        if self.min <= *x && *x <= self.max {true} else {false}
+    }
+
+    pub fn surrounds(&self, x:&f32)->bool{
+        if self.min < *x && *x < self.max {true} else {false}
+    }
+
+    const EMPTY:Interval = Interval{min:INF,max:-INF};
+    const UNIVERSE: Interval = Interval{min:-INF,max:INF};
+}
+
+
+#[inline(always)]
+fn degrees_to_radians(degrees:f32)->f32{
+    (degrees*PI)/180.0
+}
+
+
 fn main(){
     env_logger::init();
 
@@ -461,6 +508,13 @@ fn main(){
 
     let image_height = (image_width/aspect_ratio) as u32;
     let image_height = if image_height<1{1} else {image_height};
+
+
+    //WORLD
+
+    let mut world: HittableList = HittableList::default();
+    world.add(Rc::new(Sphere::new(&Point3::filled_vector(0.0, 0.0, -1.0), 0.5)));
+    world.add(Rc::new(Sphere::new(&Point3::filled_vector(0.0, -100.5, -1.0), 100.0)));
 
 
 
@@ -498,7 +552,7 @@ fn main(){
             let ray_direction = pixel_center.clone() - (camera_center.clone());
             let r = Ray::filled_ray(camera_center.clone(), ray_direction.clone());
 
-            let pixel_color = ray_color(&r);
+            let pixel_color = ray_color(&r,&world);
             write_color(pixel_color);
         }
         
