@@ -1,3 +1,4 @@
+use env_logger::fmt::Color;
 use log::{info, set_boxed_logger, ParseLevelError};
 use std::ops::{Neg,AddAssign,MulAssign,DivAssign,Index,IndexMut,Add,Sub,Div,Mul,Deref,DerefMut};
 use std::fmt;
@@ -499,12 +500,46 @@ fn degrees_to_radians(degrees:f32)->f32{
     (degrees*PI)/180.0
 }
 
+struct Camera{
+    pub aspect_ratio:f32 = 16.0/9.0,
+    pub image_width = 400.0;
+}
+
+impl Camera {
+    pub render(world:&Hittable){
+
+    }
+
+    fn initialize(){
+
+    }
+
+    fn ray_color(r:&Ray,world:&HittableList)->Color{
+        let mut rec:HitRecord = HitRecord::default();
+
+        if world.hit(r, Interval{min:0.0, max:INF}, &mut rec){
+            return 0.5*(rec.normal+Color::filled_vector(1.0, 1.0, 1.0));
+        }
+
+
+        // let t =  hit_sphere(&Point3::filled_vector(0.0, 0.0, -1.0), 0.5, r);
+        // if t > 0.0 {
+        //     let n: Vec3 = unit_vector(r.clone().at(t)-Vec3::filled_vector(0.0, 0.0, -1.0));
+        //     return 0.5*Color::filled_vector(n.x()+1.0, n.y()+1.0, n.z()+1.0)
+        // }
+
+        let unit_direction = unit_vector(r.clone().direction());
+        let a = 0.5*(unit_direction.y() + 1.0);
+        ((1.0-a)*Color::filled_vector(1.0, 1.0, 1.0)) + (a*Color::filled_vector(0.5, 0.7, 1.0))
+        }
+}
+
+
 
 fn main(){
     env_logger::init();
 
-    let aspect_ratio = 16.0/9.0;
-    let image_width = 400.0;
+    
 
     let image_height = (image_width/aspect_ratio) as u32;
     let image_height = if image_height<1{1} else {image_height};
