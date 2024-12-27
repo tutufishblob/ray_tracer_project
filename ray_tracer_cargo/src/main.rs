@@ -1,6 +1,6 @@
-use env_logger::fmt::Color;
+//use env_logger::fmt::Color;
 use log::{info, set_boxed_logger, ParseLevelError};
-use std::ops::{Neg,AddAssign,MulAssign,DivAssign,Index,IndexMut,Add,Sub,Div,Mul,Deref,DerefMut};
+use std::ops::{Neg,AddAssign,MulAssign,DivAssign,Index,IndexMut,Add,Sub,Div,Mul};
 use std::fmt;
 use std::rc::Rc;
 
@@ -501,17 +501,84 @@ fn degrees_to_radians(degrees:f32)->f32{
 }
 
 struct Camera{
-    pub aspect_ratio:f32 = 16.0/9.0,
-    pub image_width = 400.0;
+    aspect_ratio:f32,
+    image_width:f32,
+
+    image_height:u32,
+    center:Point3,
+    pixel100_loc:Point3,
+    pixel_delta_u:Vec3,
+    pixel_delta_v:Vec3,
 }
 
 impl Camera {
-    pub render(world:&Hittable){
 
+    // pub fn default()->Camera{
+        
+    // }
+
+
+    pub fn render(self, world: &HittableList){
+        print!("P3\n{} {}\n255\n",self.image_width,self.image_height);
+    
+        for j in 0..self.image_height{
+            info!("\rScanlines remaining: {} ",(self.image_height-j));
+            for i in 0..self.image_width as u32{
+                let pixel_center = self.pixel100_loc.clone() + (i as f32 *self.pixel_delta_u.clone()) + (j as f32 *self.pixel_delta_v.clone());
+                let ray_direction = pixel_center.clone() - (self.center.clone());
+                let r = Ray::filled_ray(self.center.clone(), ray_direction.clone());
+
+                let pixel_color = ray_color(&r,&world);
+                write_color(pixel_color);
+            }
+            
+        }
+        info!("\rDone              \n");
     }
 
-    fn initialize(){
 
+
+    pub fn initialize(aspect_ratio:f32, image_width:f32)->Camera{
+
+        let image_height =  (image_width/aspect_ratio) as u32;
+        let image_height = if image_height<1{1} else {image_height};
+
+        let focal_length = 1.0;
+
+        let viewport_height = 2.0;
+        let viewport_width = viewport_height * (image_width/image_height as f32);
+
+        let camera_center = Point3::blank_vector();
+
+
+        let viewport_u = Vec3::filled_vector(viewport_width, 0.0, 0.0);
+        let viewport_v = Vec3::filled_vector(0.0, -viewport_height, 0.0);
+
+        let viewport_upper_left = camera_center.clone() - Vec3::filled_vector(0.0, 0.0, focal_length) - (viewport_u.clone()/2.0) - (viewport_v.clone()/2.0);
+
+        let pixel_delta_u=  viewport_u.clone()/image_width;
+        let pixel_delta_v = viewport_v.clone()/image_height as f32;
+
+        
+        let pixel100_loc = viewport_upper_left.clone() + (0.5*(pixel_delta_u.clone()+pixel_delta_v.clone()));
+
+        Camera{
+        aspect_ratio: aspect_ratio,
+        image_width: image_width,
+
+
+        image_height:image_height,
+
+
+        center: camera_center,
+       
+
+        pixel_delta_u: pixel_delta_u,
+        pixel_delta_v: pixel_delta_v,
+
+        
+        pixel100_loc: pixel100_loc,
+        }
     }
 
     fn ray_color(r:&Ray,world:&HittableList)->Color{
@@ -539,38 +606,14 @@ impl Camera {
 fn main(){
     env_logger::init();
 
-    
-
-    let image_height = (image_width/aspect_ratio) as u32;
-    let image_height = if image_height<1{1} else {image_height};
-
-
-    //WORLD
-
     let mut world: HittableList = HittableList::default();
+
     world.add(Rc::new(Sphere::new(&Point3::filled_vector(0.0, 0.0, -1.0), 0.5)));
     world.add(Rc::new(Sphere::new(&Point3::filled_vector(0.0, -100.5, -1.0), 100.0)));
 
+    let cam = Camera::initialize(16.0/9.0, 400.0);
 
-
-    let focal_length = 1.0;
-
-    let viewport_height = 2.0;
-    let viewport_width = viewport_height * (image_width/image_height as f32);
-
-    let camera_center = Point3::blank_vector();
-
-
-    let viewport_u = Vec3::filled_vector(viewport_width, 0.0, 0.0);
-    let viewport_v = Vec3::filled_vector(0.0, -viewport_height, 0.0);
-
-    let pixel_delta_u = viewport_u.clone()/image_width;
-    let pixel_delta_v = viewport_v.clone()/image_height as f32;
-
-    let viewport_upper_left = camera_center.clone() - Vec3::filled_vector(0.0, 0.0, focal_length) - (viewport_u.clone()/2.0) - (viewport_v.clone()/2.0);
-
-    let pixel100_loc = viewport_upper_left.clone() + (0.5*(pixel_delta_u.clone()+pixel_delta_v.clone()));
-
+    cam.render(&world);
     
 
     //let height = 256;
@@ -578,21 +621,7 @@ fn main(){
 
     
     
-    print!("P3\n{} {}\n255\n",image_width,image_height);
     
-    for j in 0..image_height{
-        info!("\rScanlines remaining: {} ",(image_height-j));
-        for i in 0..image_width as u32{
-            let pixel_center = pixel100_loc.clone() + (i as f32 *pixel_delta_u.clone()) + (j as f32 *pixel_delta_v.clone());
-            let ray_direction = pixel_center.clone() - (camera_center.clone());
-            let r = Ray::filled_ray(camera_center.clone(), ray_direction.clone());
-
-            let pixel_color = ray_color(&r,&world);
-            write_color(pixel_color);
-        }
-        
-    }
-    info!("\rDone              \n");
 
     
 }
