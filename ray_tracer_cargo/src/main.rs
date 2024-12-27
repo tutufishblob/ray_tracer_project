@@ -3,6 +3,8 @@ use log::{info, set_boxed_logger, ParseLevelError};
 use std::ops::{Neg,AddAssign,MulAssign,DivAssign,Index,IndexMut,Add,Sub,Div,Mul};
 use std::fmt;
 use std::rc::Rc;
+use rand::Rng;
+
 
 //use std::env;
 //use std::fs;
@@ -13,6 +15,7 @@ use std::rc::Rc;
 
 const PI: f32 = 3.141592653589793;
 const INF: f32 = f32::INFINITY;
+
 struct Vec3{
     e: [f32; 3],
 
@@ -271,9 +274,12 @@ fn write_color(pixel_color: Color){
     let g = pixel_color.y();
     let b = pixel_color.z();
 
-    let rbyte = (259.999*r) as u32;
-    let gbyte = (259.999*g) as u32;
-    let bbyte = (259.999*b) as u32;
+
+    let intensity = Interval::new(0.000,0.999);
+
+    let rbyte = (256.0*intensity.clamp(r)) as u32;
+    let gbyte = (256.0*intensity.clamp(g)) as u32;
+    let bbyte = (256.0*intensity.clamp(b)) as u32;
 
     println!("{} {} {}", rbyte,gbyte,bbyte);
     
@@ -490,6 +496,18 @@ impl Interval{
         if self.min < *x && *x < self.max {true} else {false}
     }
 
+    pub fn clamp(&self, x:f32)->f32{
+        if x < self.min{
+            return self.min;
+        }
+        if x > self.max{
+            return self.max;
+        }
+
+        x
+
+    }
+
     const EMPTY:Interval = Interval{min:INF,max:-INF};
     const UNIVERSE: Interval = Interval{min:-INF,max:INF};
 }
@@ -500,15 +518,33 @@ fn degrees_to_radians(degrees:f32)->f32{
     (degrees*PI)/180.0
 }
 
+#[inline(always)]
+pub fn random_double()->f32{
+    let mut rng = rand::thread_rng();
+    rng.gen()
+}
+
+#[inline(always)]
+fn random_double_with_range(min:f32,max:f32)->f32{
+    let mut rng = rand::thread_rng();
+    rng.gen_range(min..max)
+}
+
+
+
+
 struct Camera{
     aspect_ratio:f32,
     image_width:f32,
+    samples_per_pixel:u32,
 
     image_height:u32,
     center:Point3,
     pixel100_loc:Point3,
     pixel_delta_u:Vec3,
     pixel_delta_v:Vec3,
+
+    pixel_samples_scale:f32,
 }
 
 impl Camera {
@@ -518,18 +554,26 @@ impl Camera {
     // }
 
 
-    pub fn render(self, world: &HittableList){
+    pub fn render(&self, world: &HittableList){
         print!("P3\n{} {}\n255\n",self.image_width,self.image_height);
     
         for j in 0..self.image_height{
             info!("\rScanlines remaining: {} ",(self.image_height-j));
             for i in 0..self.image_width as u32{
-                let pixel_center = self.pixel100_loc.clone() + (i as f32 *self.pixel_delta_u.clone()) + (j as f32 *self.pixel_delta_v.clone());
-                let ray_direction = pixel_center.clone() - (self.center.clone());
-                let r = Ray::filled_ray(self.center.clone(), ray_direction.clone());
 
-                let pixel_color = ray_color(&r,&world);
-                write_color(pixel_color);
+                let mut pixel_color = Color::blank_vector();
+
+                for sample in 0..self.samples_per_pixel {
+                    let r = self.get_ray(i,j);
+                    pixel_color += ray_color(&r,&world);
+                }
+
+                // let pixel_center = self.pixel100_loc.clone() + (i as f32 *self.pixel_delta_u.clone()) + (j as f32 *self.pixel_delta_v.clone());
+                // let ray_direction = pixel_center.clone() - (self.center.clone());
+                // let r = Ray::filled_ray(self.center.clone(), ray_direction.clone());
+
+                
+                write_color(self.pixel_samples_scale * pixel_color);
             }
             
         }
@@ -538,7 +582,7 @@ impl Camera {
 
 
 
-    pub fn initialize(aspect_ratio:f32, image_width:f32)->Camera{
+    pub fn initialize(aspect_ratio:f32, image_width:f32,samples_per_pixel:u32)->Camera{
 
         let image_height =  (image_width/aspect_ratio) as u32;
         let image_height = if image_height<1{1} else {image_height};
@@ -563,8 +607,10 @@ impl Camera {
         let pixel100_loc = viewport_upper_left.clone() + (0.5*(pixel_delta_u.clone()+pixel_delta_v.clone()));
 
         Camera{
+
         aspect_ratio: aspect_ratio,
         image_width: image_width,
+        samples_per_pixel:samples_per_pixel,
 
 
         image_height:image_height,
@@ -578,8 +624,29 @@ impl Camera {
 
         
         pixel100_loc: pixel100_loc,
+
+        pixel_samples_scale:1.0/samples_per_pixel as f32,
         }
     }
+
+    fn sample_square()->Vec3{
+        Vec3::filled_vector(random_double()-0.5,random_double()-0.5,0.0)
+    }
+
+    fn get_ray(&self,i:u32,j:u32)->Ray{
+        let offset:Vec3 = Camera::sample_square();
+        let pixel_sample = self.pixel100_loc.clone()
+            + ((i as f32+offset.x()) as f32 * self.pixel_delta_u.clone()) 
+            + ((j as f32+offset.y()) as f32 * self.pixel_delta_v.clone());
+
+        let ray_origin = self.center.clone();
+        let ray_direction = pixel_sample - ray_origin.clone();
+
+        Ray::filled_ray(ray_origin,ray_direction)
+
+    }
+
+    
 
     fn ray_color(r:&Ray,world:&HittableList)->Color{
         let mut rec:HitRecord = HitRecord::default();
@@ -611,7 +678,7 @@ fn main(){
     world.add(Rc::new(Sphere::new(&Point3::filled_vector(0.0, 0.0, -1.0), 0.5)));
     world.add(Rc::new(Sphere::new(&Point3::filled_vector(0.0, -100.5, -1.0), 100.0)));
 
-    let cam = Camera::initialize(16.0/9.0, 400.0);
+    let cam = Camera::initialize(16.0/9.0, 400.0,100);
 
     cam.render(&world);
     
