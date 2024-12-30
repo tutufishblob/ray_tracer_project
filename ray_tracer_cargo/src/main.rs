@@ -34,6 +34,19 @@ impl  Vec3{
         }
     }
 
+
+    pub fn random()->Vec3{
+        Vec3{
+            e: [random_double(),random_double(),random_double()]
+        }
+    }
+
+    pub fn random_ranged(min:f32,max:f32)->Vec3{
+        Vec3{
+            e: [random_double_with_range(min,max),random_double_with_range(min,max),random_double_with_range(min,max)]
+        }
+    }
+
     pub const fn x(&self)->f32{
         self.e[0]
     }
@@ -219,8 +232,31 @@ fn cross_product(u: &Vec3, v: &Vec3)->Vec3{
         (u.e[0] * v.e[1] - u.e[1] * v.e[0])]}
 }
 
+
+#[inline(always)]
 fn unit_vector(v: Vec3)->Vec3{
     v.clone() / v.length()
+}
+
+#[inline(always)]
+fn random_unit_vector()->Vec3{
+    loop{
+        let p = Vec3::random_ranged(-1.0,1.0);
+        let lensq = p.length_squared();
+        if 1e-160 < lensq && lensq <= 1.0{
+            return p/lensq.sqrt();
+        }
+    }
+    Vec3::blank_vector()
+}
+
+#[inline(always)]
+fn random_on_hemisphere(normal:&Vec3)-> Vec3{
+    let on_unit_sphere = random_unit_vector();
+    if dot_product(&on_unit_sphere,&normal) > 0.0{
+        return on_unit_sphere;
+    }
+    -on_unit_sphere
 }
 
 type Point3 = Vec3;
@@ -270,10 +306,13 @@ impl fmt::Display for Vec3 {
 }
 
 fn write_color(pixel_color: Color){
-    let r = pixel_color.x();
-    let g = pixel_color.y();
-    let b = pixel_color.z();
+    let mut r = pixel_color.x();
+    let mut g = pixel_color.y();
+    let mut b = pixel_color.z();
 
+    r = linear_to_gamma(r);
+    g = linear_to_gamma(g);
+    b = linear_to_gamma(b);
 
     let intensity = Interval::new(0.000,0.999);
 
@@ -286,23 +325,23 @@ fn write_color(pixel_color: Color){
 }
 
 
-fn ray_color(r:&Ray,world:&HittableList)->Color{
-    let mut rec:HitRecord = HitRecord::default();
-    if world.hit(r, Interval{min:0.0, max:INF}, &mut rec){
-        return 0.5*(rec.normal+Color::filled_vector(1.0, 1.0, 1.0));
-    }
+// fn ray_color(r:&Ray,world:&HittableList)->Color{
+//     let mut rec:HitRecord = HitRecord::default();
+//     if world.hit(r, Interval{min:0.0, max:INF}, &mut rec){
+//         return 0.5*(rec.normal+Color::filled_vector(1.0, 1.0, 1.0));
+//     }
 
 
-    let t =  hit_sphere(&Point3::filled_vector(0.0, 0.0, -1.0), 0.5, r);
-    if t > 0.0 {
-        let n: Vec3 = unit_vector(r.clone().at(t)-Vec3::filled_vector(0.0, 0.0, -1.0));
-        return 0.5*Color::filled_vector(n.x()+1.0, n.y()+1.0, n.z()+1.0)
-    }
+//     let t =  hit_sphere(&Point3::filled_vector(0.0, 0.0, -1.0), 0.5, r);
+//     if t > 0.0 {
+//         let n: Vec3 = unit_vector(r.clone().at(t)-Vec3::filled_vector(0.0, 0.0, -1.0));
+//         return 0.5*Color::filled_vector(n.x()+1.0, n.y()+1.0, n.z()+1.0)
+//     }
 
-    let unit_direction = unit_vector(r.clone().direction());
-    let a = 0.5*(unit_direction.y() + 1.0);
-    ((1.0-a)*Color::filled_vector(1.0, 1.0, 1.0)) + (a*Color::filled_vector(0.5, 0.7, 1.0))
-}
+//     let unit_direction = unit_vector(r.clone().direction());
+//     let a = 0.5*(unit_direction.y() + 1.0);
+//     ((1.0-a)*Color::filled_vector(1.0, 1.0, 1.0)) + (a*Color::filled_vector(0.5, 0.7, 1.0))
+// }
 
 fn hit_sphere(center: &Point3,radius:f32, r: &Ray)->f32{
     let oc = center.clone() - r.clone().origin();
@@ -512,6 +551,13 @@ impl Interval{
     const UNIVERSE: Interval = Interval{min:-INF,max:INF};
 }
 
+#[inline(always)]
+fn linear_to_gamma(linear_component:f32)->f32{
+    if linear_component > 0.0{
+        return linear_component.sqrt();
+    }
+    0.0
+}
 
 #[inline(always)]
 fn degrees_to_radians(degrees:f32)->f32{
@@ -534,6 +580,7 @@ fn random_double_with_range(min:f32,max:f32)->f32{
 
 
 struct Camera{
+    max_depth:u32,
     aspect_ratio:f32,
     image_width:f32,
     samples_per_pixel:u32,
@@ -565,12 +612,8 @@ impl Camera {
 
                 for sample in 0..self.samples_per_pixel {
                     let r = self.get_ray(i,j);
-                    pixel_color += ray_color(&r,&world);
+                    pixel_color += self.ray_color(&r,self.max_depth,&world);
                 }
-
-                // let pixel_center = self.pixel100_loc.clone() + (i as f32 *self.pixel_delta_u.clone()) + (j as f32 *self.pixel_delta_v.clone());
-                // let ray_direction = pixel_center.clone() - (self.center.clone());
-                // let r = Ray::filled_ray(self.center.clone(), ray_direction.clone());
 
                 
                 write_color(self.pixel_samples_scale * pixel_color);
@@ -583,6 +626,8 @@ impl Camera {
 
 
     pub fn initialize(aspect_ratio:f32, image_width:f32,samples_per_pixel:u32)->Camera{
+
+        let max_depth = 50;
 
         let image_height =  (image_width/aspect_ratio) as u32;
         let image_height = if image_height<1{1} else {image_height};
@@ -608,6 +653,9 @@ impl Camera {
 
         Camera{
 
+
+        max_depth:max_depth,
+        
         aspect_ratio: aspect_ratio,
         image_width: image_width,
         samples_per_pixel:samples_per_pixel,
@@ -648,11 +696,16 @@ impl Camera {
 
     
 
-    fn ray_color(r:&Ray,world:&HittableList)->Color{
+    fn ray_color(&self, r:&Ray,depth:u32, world:&HittableList)->Color{
+        if depth <= 0{
+            return Color::blank_vector();
+        }
+
         let mut rec:HitRecord = HitRecord::default();
 
-        if world.hit(r, Interval{min:0.0, max:INF}, &mut rec){
-            return 0.5*(rec.normal+Color::filled_vector(1.0, 1.0, 1.0));
+        if world.hit(r, Interval{min:0.001, max:INF}, &mut rec){
+            let direction = rec.normal.clone() + random_on_hemisphere(&rec.normal);
+            return 0.5*(self.ray_color(&Ray::filled_ray(rec.p,direction),depth-1,&world));
         }
 
 
