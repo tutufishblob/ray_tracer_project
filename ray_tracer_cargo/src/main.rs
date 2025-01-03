@@ -1,4 +1,5 @@
 //use env_logger::fmt::Color;
+//use env_logger::fmt::Color;
 use log::{info, set_boxed_logger, ParseLevelError};
 use std::ops::{Neg,AddAssign,MulAssign,DivAssign,Index,IndexMut,Add,Sub,Div,Mul};
 use std::fmt;
@@ -65,6 +66,11 @@ impl  Vec3{
 
     pub fn length_squared(&self)->f32{
         (self.e[0]* self.e[0]) + (self.e[1]* self.e[1]) + (self.e[2]* self.e[2])
+    }
+
+    pub fn near_zero(&self)->bool{
+        let s = 1e-8;
+        return if self.e[0].abs() < s && self.e[1].abs() < s && self.e[2].abs() < s {true} else {false}
     }
     
 }
@@ -247,7 +253,7 @@ fn random_unit_vector()->Vec3{
             return p/lensq.sqrt();
         }
     }
-    Vec3::blank_vector()
+    //Vec3::blank_vector()
 }
 
 #[inline(always)]
@@ -257,6 +263,11 @@ fn random_on_hemisphere(normal:&Vec3)-> Vec3{
         return on_unit_sphere;
     }
     -on_unit_sphere
+}
+
+#[inline(always)]
+fn reflect(v:&Vec3,n:&Vec3)->Vec3{
+    return v.clone()-2.0*dot_product(v, n)*n.clone();
 }
 
 type Point3 = Vec3;
@@ -365,6 +376,7 @@ struct HitRecord{
     normal:Vec3,
     t:f32,
     front_face:bool,
+    mat: Rc<dyn Material>,
 }
 
 impl HitRecord {
@@ -379,6 +391,7 @@ impl HitRecord {
         normal:Vec3::blank_vector(),
         t:0.0,
         front_face:false,
+        mat:Rc::new(BlankMaterial{})
         }
     }
 }
@@ -389,7 +402,8 @@ impl Clone for HitRecord {
             p: self.p.clone(),
             normal:self.normal.clone(),
             t:self.t.clone(),
-            front_face:self.front_face.clone()
+            front_face:self.front_face.clone(),
+            mat:self.mat.clone()
         }
     }
 }
@@ -401,14 +415,16 @@ trait Hittable{
 
 struct Sphere{
     center: Point3,
-    radius:f32
+    radius:f32,
+    mat: Rc<dyn Material>,
 }
 
 impl Sphere{
-    pub fn new(center: &Point3,radius:f32)->Sphere{
+    pub fn new(center: &Point3,radius:f32,mat:Rc<dyn Material>)->Sphere{
         Sphere{
             center: center.clone(),
-            radius: if 0.0 >  radius {0.0} else {radius}
+            radius: if 0.0 >  radius {0.0} else {radius},
+            mat: mat,
         }
     }
 }
@@ -417,7 +433,8 @@ impl Clone for Sphere {
     fn clone(&self) -> Self {
         Self {
             center:self.center.clone(),
-            radius:self.radius.clone()
+            radius:self.radius.clone(),
+            mat: self.mat.clone(),
         }
     }
 }
@@ -451,7 +468,7 @@ impl Hittable for Sphere {
         rec.p = r.clone().at(rec.t);
         let outward_normal = (rec.clone().p - self.center.clone())/self.radius;
         rec.set_face_normal(r, outward_normal);
-
+        rec.mat = self.mat.clone();
 
         true
 
@@ -610,7 +627,7 @@ impl Camera {
 
                 let mut pixel_color = Color::blank_vector();
 
-                for sample in 0..self.samples_per_pixel {
+                for _sample in 0..self.samples_per_pixel {
                     let r = self.get_ray(i,j);
                     pixel_color += self.ray_color(&r,self.max_depth,&world);
                 }
@@ -704,8 +721,14 @@ impl Camera {
         let mut rec:HitRecord = HitRecord::default();
 
         if world.hit(r, Interval{min:0.001, max:INF}, &mut rec){
-            let direction = rec.normal.clone() + random_on_hemisphere(&rec.normal);
-            return 0.5*(self.ray_color(&Ray::filled_ray(rec.p,direction),depth-1,&world));
+            let mut scattered= Ray::blank_ray();
+            let mut attenuation= Color::blank_vector();
+            if rec.mat.scatter(&r,&rec,&mut attenuation,&mut scattered){
+                return attenuation * self.ray_color(&scattered, depth-1, world);
+            }
+            // let direction = rec.normal.clone() + random_on_hemisphere(&rec.normal);
+            // return 0.5*(self.ray_color(&Ray::filled_ray(rec.p,direction),depth-1,&world));
+            return Color::blank_vector()
         }
 
 
@@ -721,15 +744,100 @@ impl Camera {
         }
 }
 
+trait Material{
+    fn scatter(&self, r_in:&Ray,rec:&HitRecord,attenuation:&mut Color,scattered:&mut Ray)->bool;
+}
 
+// impl Material{
+//     // pub fn scatter({
+//     //     false
+//     // }
+// }
+
+struct Lambertian{
+    albedo:Color,
+
+}
+
+impl Lambertian{
+    pub fn new(albedo:Color)->Lambertian{
+        Lambertian{
+            albedo: albedo,
+        }
+    }
+
+    
+
+}
+
+impl Material for Lambertian {
+    fn scatter(&self, _r_in:&Ray,rec:&HitRecord,attenuation:&mut Color,scattered:&mut Ray)->bool {
+        let mut scatter_direction = rec.normal.clone() + random_unit_vector();
+        if scatter_direction.near_zero(){
+            scatter_direction = rec.normal.clone();
+        }
+        *scattered = Ray::filled_ray(rec.p.clone(),scatter_direction);
+        *attenuation = self.albedo.clone();
+        true
+    }
+}
+
+struct BlankMaterial{
+
+}
+
+impl Material for BlankMaterial {
+    fn scatter(&self, _r_in:&Ray,_rec:&HitRecord,_attenuation:&mut Color,_scattered:&mut Ray)->bool {
+        false
+    }
+}
+
+struct Metal{
+    albedo:Color,
+    fuzz:f32,
+}
+
+impl Metal{
+    pub fn new(albedo:Color,fuzz:f32)->Metal{
+        let mut temp = fuzz;
+        if fuzz >= 1.0{
+            temp = 1.0;
+        }
+        Metal{
+            albedo: albedo,
+            fuzz: temp
+        }
+    }
+
+
+
+}
+
+impl Material for Metal{
+    fn scatter(&self, r_in:&Ray,rec:&HitRecord,attenuation:&mut Color,scattered:&mut Ray)->bool {
+        let mut reflected = reflect(&r_in.clone().direction(), &rec.normal);
+        reflected = unit_vector(reflected) + (self.fuzz*random_unit_vector());
+        *scattered = Ray::filled_ray(rec.p.clone(),reflected);
+        *attenuation = self.albedo.clone();
+        if dot_product(&scattered.clone().direction(), &rec.normal) > 0.0 {return true} else {return false}
+        true
+    }
+}
 
 fn main(){
     env_logger::init();
 
     let mut world: HittableList = HittableList::default();
 
-    world.add(Rc::new(Sphere::new(&Point3::filled_vector(0.0, 0.0, -1.0), 0.5)));
-    world.add(Rc::new(Sphere::new(&Point3::filled_vector(0.0, -100.5, -1.0), 100.0)));
+    let material_ground = Rc::new(Lambertian::new(Color::filled_vector(0.8, 0.8, 0.0)));
+    let material_center = Rc::new(Lambertian::new(Color::filled_vector(0.1, 0.2, 0.5)));
+    let material_left = Rc::new(Metal::new(Color::filled_vector(0.8, 0.8, 0.8),0.3));
+    let material_right = Rc::new(Metal::new(Color::filled_vector(0.8, 0.6, 0.2),1.0));
+
+    world.add(Rc::new(Sphere::new(&Point3::filled_vector(0.0, 0.0, -1.2), 0.5,material_center)));
+    world.add(Rc::new(Sphere::new(&Point3::filled_vector(0.0, -100.5, -1.0), 100.0,material_ground)));
+    world.add(Rc::new(Sphere::new(&Point3::filled_vector(-1.0, 0.0, -1.0), 0.5,material_left)));
+    world.add(Rc::new(Sphere::new(&Point3::filled_vector(1.0, 0.0, -1.0), 0.5,material_right)));
 
     let cam = Camera::initialize(16.0/9.0, 400.0,100);
 
