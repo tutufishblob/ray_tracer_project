@@ -624,6 +624,11 @@ struct Camera{
     pixel_delta_v:Vec3,
 
     pixel_samples_scale:f32,
+    vfov:f32,
+
+    lookfrom:Point3,
+    lookat:Point3,
+    vup:Vec3,
 }
 
 impl Camera {
@@ -657,34 +662,56 @@ impl Camera {
 
 
 
-    pub fn initialize(aspect_ratio:f32, image_width:f32,samples_per_pixel:u32)->Camera{
+    pub fn initialize(aspect_ratio:f32, image_width:f32,samples_per_pixel:u32,vfov:f32,lookfrom:Point3,lookat:Point3,vup:Vec3)->Camera{
+        //let vfov = 90.0;
+        
+
 
         let max_depth = 50;
 
         let image_height =  (image_width/aspect_ratio) as u32;
         let image_height = if image_height<1{1} else {image_height};
 
-        let focal_length = 1.0;
+        let focal_length = (lookfrom.clone()-lookat.clone()).length();
 
-        let viewport_height = 2.0;
+
+        let theta =  degrees_to_radians(vfov);
+        let h = (theta/2.0).tan();
+
+
+        let viewport_height = 2.0*h*focal_length;
         let viewport_width = viewport_height * (image_width/image_height as f32);
 
-        let camera_center = Point3::blank_vector();
+        let camera_center = lookfrom.clone();
+        
+        let w = unit_vector(lookfrom.clone()-lookat.clone());
+        let u = unit_vector(cross_product(&vup, &w));
+        let v = cross_product(&w, &u);
 
 
-        let viewport_u = Vec3::filled_vector(viewport_width, 0.0, 0.0);
-        let viewport_v = Vec3::filled_vector(0.0, -viewport_height, 0.0);
 
-        let viewport_upper_left = camera_center.clone() - Vec3::filled_vector(0.0, 0.0, focal_length) - (viewport_u.clone()/2.0) - (viewport_v.clone()/2.0);
+
+        let viewport_u = viewport_width*u;
+        let viewport_v = viewport_height*-v;
+
+        //let viewport_upper_left = camera_center.clone() - Vec3::filled_vector(0.0, 0.0, focal_length) - (viewport_u.clone()/2.0) - (viewport_v.clone()/2.0);
 
         let pixel_delta_u=  viewport_u.clone()/image_width;
         let pixel_delta_v = viewport_v.clone()/image_height as f32;
+
+        let viewport_upper_left: Vec3 = camera_center.clone() - (focal_length*w) - viewport_u/2.0 - viewport_v/2.0;
+
 
         
         let pixel100_loc = viewport_upper_left.clone() + (0.5*(pixel_delta_u.clone()+pixel_delta_v.clone()));
 
         Camera{
+        lookfrom:lookfrom,
+        lookat:lookat,
+        vup:vup,
 
+
+        vfov:vfov,
 
         max_depth:max_depth,
         
@@ -892,6 +919,12 @@ fn main(){
 
     let mut world: HittableList = HittableList::default();
 
+    // let R = (PI/4.0).cos();
+
+
+    // let material_left = Rc::new(Lambertian::new(Color::filled_vector(0.0, 0.0, 1.0)));
+    // let material_right = Rc::new(Lambertian::new(Color::filled_vector(1.0, 0.0, 0.0)));
+
     let material_ground = Rc::new(Lambertian::new(Color::filled_vector(0.8, 0.8, 0.0)));
     let material_center = Rc::new(Lambertian::new(Color::filled_vector(0.1, 0.2, 0.5)));
     let material_left = Rc::new(Dialectric::new(1.5));
@@ -904,7 +937,15 @@ fn main(){
     world.add(Rc::new(Sphere::new(&Point3::filled_vector(-1.0, 0.0, -1.0), 0.4,material_bubble)));
     world.add(Rc::new(Sphere::new(&Point3::filled_vector(1.0, 0.0, -1.0), 0.5,material_right)));
 
-    let cam = Camera::initialize(16.0/9.0, 400.0,500);
+    // world.add(Rc::new(Sphere::new(&Point3::filled_vector(-R, 0.0, -1.0), R,material_left)));
+    // world.add(Rc::new(Sphere::new(&Point3::filled_vector(R, 0.0, -1.0), R,material_right)));
+
+
+    let lookfrom = Point3::filled_vector(-2.0, 2.0, 1.0);
+    let lookat= Point3::filled_vector(0.0, 0.0, -1.0);
+    let vup = Vec3::filled_vector(0.0, 1.0, 0.0);
+
+    let cam = Camera::initialize(16.0/9.0, 400.0,500, 20.0,lookfrom,lookat,vup);
 
     cam.render(&world);
     
