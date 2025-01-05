@@ -5,7 +5,7 @@ use std::ops::{Neg,AddAssign,MulAssign,DivAssign,Index,IndexMut,Add,Sub,Div,Mul}
 use std::fmt;
 use std::rc::Rc;
 use rand::Rng;
-
+use std::cmp::min;
 
 //use std::env;
 //use std::fs;
@@ -268,6 +268,21 @@ fn random_on_hemisphere(normal:&Vec3)-> Vec3{
 #[inline(always)]
 fn reflect(v:&Vec3,n:&Vec3)->Vec3{
     return v.clone()-2.0*dot_product(v, n)*n.clone();
+}
+
+#[inline(always)]
+
+fn refract(uv:&Vec3, n: &Vec3, etai_over_etat:f32)->Vec3{
+    let mut cos_theta = 1.0;
+    let temp = dot_product(&-uv.clone(), n);
+    if temp < cos_theta {
+        cos_theta = temp;
+    }
+    let r_out_perp: Vec3 = etai_over_etat * (uv.clone()+(cos_theta*n.clone()));
+    let r_out_parallel:Vec3 = -((1.0 - r_out_perp.length_squared()).abs().sqrt())*n.clone();
+
+    r_out_parallel+r_out_perp
+    
 }
 
 type Point3 = Vec3;
@@ -824,6 +839,54 @@ impl Material for Metal{
     }
 }
 
+struct Dialectric{
+    refraction_index:f32,
+
+}
+
+impl Dialectric{
+    pub fn new(refraction_index:f32)->Dialectric{
+        Dialectric{
+            refraction_index:refraction_index,
+        }
+    }
+
+    fn reflectance(&self, cosine: f32, refraction_index:f32)->f32{
+        let mut r0 = (1.0-refraction_index)/(1.0+refraction_index);
+        r0 = r0*r0;
+        r0 + (1.0-r0)*(1.0-cosine).powf(5.0)
+    }
+
+    
+}
+
+impl Material for Dialectric{
+    fn scatter(&self, r_in:&Ray,rec:&HitRecord,attenuation:&mut Color,scattered:&mut Ray)->bool {
+        *attenuation = Color::filled_vector(1.0, 1.0, 1.0);
+        let ri = if rec.front_face {1.0/self.refraction_index} else{self.refraction_index};
+        let unit_direction = unit_vector(r_in.clone().direction());
+        
+        let cos_theta = f32::min(dot_product(&-unit_direction.clone(), &rec.normal),1.0 as f32);
+        let sin_theta= (1.0-cos_theta*cos_theta).sqrt();
+
+        let cannot_refract = if ri*sin_theta > 1.0 {true} else {false};
+
+        let mut direction = Vec3::blank_vector();
+
+        if cannot_refract || self.reflectance(cos_theta,ri) > random_double(){
+            direction = reflect(&unit_direction, &rec.normal);
+        }
+        else{
+            direction = refract(&unit_direction, &rec.normal, ri);
+        }
+
+        *scattered = Ray::filled_ray(rec.p.clone(), direction);
+
+        true
+
+    }
+}
+
 fn main(){
     env_logger::init();
 
@@ -831,15 +894,17 @@ fn main(){
 
     let material_ground = Rc::new(Lambertian::new(Color::filled_vector(0.8, 0.8, 0.0)));
     let material_center = Rc::new(Lambertian::new(Color::filled_vector(0.1, 0.2, 0.5)));
-    let material_left = Rc::new(Metal::new(Color::filled_vector(0.8, 0.8, 0.8),0.3));
+    let material_left = Rc::new(Dialectric::new(1.5));
+    let material_bubble = Rc::new(Dialectric::new(1.0/1.5));
     let material_right = Rc::new(Metal::new(Color::filled_vector(0.8, 0.6, 0.2),1.0));
 
     world.add(Rc::new(Sphere::new(&Point3::filled_vector(0.0, 0.0, -1.2), 0.5,material_center)));
     world.add(Rc::new(Sphere::new(&Point3::filled_vector(0.0, -100.5, -1.0), 100.0,material_ground)));
     world.add(Rc::new(Sphere::new(&Point3::filled_vector(-1.0, 0.0, -1.0), 0.5,material_left)));
+    world.add(Rc::new(Sphere::new(&Point3::filled_vector(-1.0, 0.0, -1.0), 0.4,material_bubble)));
     world.add(Rc::new(Sphere::new(&Point3::filled_vector(1.0, 0.0, -1.0), 0.5,material_right)));
 
-    let cam = Camera::initialize(16.0/9.0, 400.0,100);
+    let cam = Camera::initialize(16.0/9.0, 400.0,500);
 
     cam.render(&world);
     
