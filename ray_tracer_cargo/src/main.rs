@@ -4,7 +4,7 @@ use log::{info, set_boxed_logger, ParseLevelError};
 use std::ops::{Neg,AddAssign,MulAssign,DivAssign,Index,IndexMut,Add,Sub,Div,Mul};
 use std::fmt;
 use std::rc::Rc;
-use rand::Rng;
+use rand::{random, Rng};
 use std::cmp::min;
 
 //use std::env;
@@ -242,6 +242,16 @@ fn cross_product(u: &Vec3, v: &Vec3)->Vec3{
 #[inline(always)]
 fn unit_vector(v: Vec3)->Vec3{
     v.clone() / v.length()
+}
+
+#[inline(always)]
+fn random_in_unit_disk()->Vec3{
+    loop{
+        let p = Vec3::filled_vector(random_double_with_range(-1.0, 1.0), random_double_with_range(-1.0, 1.0), 0.0);
+        if p.length_squared() < 1.0 {
+            return p;
+        }
+    }
 }
 
 #[inline(always)]
@@ -629,6 +639,12 @@ struct Camera{
     lookfrom:Point3,
     lookat:Point3,
     vup:Vec3,
+
+    defocus_angle:f32,
+    focus_dist:f32,
+
+    defocus_disk_u:Vec3,
+    defocus_disk_v:Vec3,
 }
 
 impl Camera {
@@ -662,12 +678,12 @@ impl Camera {
 
 
 
-    pub fn initialize(aspect_ratio:f32, image_width:f32,samples_per_pixel:u32,vfov:f32,lookfrom:Point3,lookat:Point3,vup:Vec3)->Camera{
+    pub fn initialize(aspect_ratio:f32, image_width:f32,samples_per_pixel:u32,vfov:f32,max_depth:u32,lookfrom:Point3,lookat:Point3,vup:Vec3,defocus_angle:f32,focus_dist:f32)->Camera{
         //let vfov = 90.0;
         
 
 
-        let max_depth = 50;
+        //let max_depth = 50;
 
         let image_height =  (image_width/aspect_ratio) as u32;
         let image_height = if image_height<1{1} else {image_height};
@@ -679,7 +695,7 @@ impl Camera {
         let h = (theta/2.0).tan();
 
 
-        let viewport_height = 2.0*h*focal_length;
+        let viewport_height = 2.0*h*focus_dist;
         let viewport_width = viewport_height * (image_width/image_height as f32);
 
         let camera_center = lookfrom.clone();
@@ -691,21 +707,28 @@ impl Camera {
 
 
 
-        let viewport_u = viewport_width*u;
-        let viewport_v = viewport_height*-v;
+        let viewport_u = viewport_width*u.clone();
+        let viewport_v = viewport_height*-v.clone();
 
         //let viewport_upper_left = camera_center.clone() - Vec3::filled_vector(0.0, 0.0, focal_length) - (viewport_u.clone()/2.0) - (viewport_v.clone()/2.0);
 
         let pixel_delta_u=  viewport_u.clone()/image_width;
         let pixel_delta_v = viewport_v.clone()/image_height as f32;
 
-        let viewport_upper_left: Vec3 = camera_center.clone() - (focal_length*w) - viewport_u/2.0 - viewport_v/2.0;
+        let viewport_upper_left: Vec3 = camera_center.clone() - (focus_dist*w) - viewport_u/2.0 - viewport_v/2.0;
 
-
+        let defocus_radius = focus_dist * degrees_to_radians(defocus_angle/2.0).tan();
+        let defocus_disk_u =u*defocus_radius;
+        let defocus_disk_v = v*defocus_radius;
         
+
         let pixel100_loc = viewport_upper_left.clone() + (0.5*(pixel_delta_u.clone()+pixel_delta_v.clone()));
 
         Camera{
+        defocus_angle:defocus_angle,
+        focus_dist:focus_dist,
+
+
         lookfrom:lookfrom,
         lookat:lookat,
         vup:vup,
@@ -733,11 +756,20 @@ impl Camera {
         pixel100_loc: pixel100_loc,
 
         pixel_samples_scale:1.0/samples_per_pixel as f32,
+
+
+        defocus_disk_u:defocus_disk_u,
+        defocus_disk_v:defocus_disk_v,
         }
     }
 
     fn sample_square()->Vec3{
         Vec3::filled_vector(random_double()-0.5,random_double()-0.5,0.0)
+    }
+
+    fn defocus_disk_sample(&self) ->Point3{
+        let p = random_in_unit_disk();
+        return self.center.clone() + (p.e[0]*self.defocus_disk_u.clone()) + (p.e[1]*self.defocus_disk_v.clone());
     }
 
     fn get_ray(&self,i:u32,j:u32)->Ray{
@@ -746,7 +778,7 @@ impl Camera {
             + ((i as f32+offset.x()) as f32 * self.pixel_delta_u.clone()) 
             + ((j as f32+offset.y()) as f32 * self.pixel_delta_v.clone());
 
-        let ray_origin = self.center.clone();
+        let ray_origin = if self.defocus_angle <= 0.0 {self.center.clone()} else{self.defocus_disk_sample()};
         let ray_direction = pixel_sample - ray_origin.clone();
 
         Ray::filled_ray(ray_origin,ray_direction)
@@ -925,27 +957,78 @@ fn main(){
     // let material_left = Rc::new(Lambertian::new(Color::filled_vector(0.0, 0.0, 1.0)));
     // let material_right = Rc::new(Lambertian::new(Color::filled_vector(1.0, 0.0, 0.0)));
 
-    let material_ground = Rc::new(Lambertian::new(Color::filled_vector(0.8, 0.8, 0.0)));
-    let material_center = Rc::new(Lambertian::new(Color::filled_vector(0.1, 0.2, 0.5)));
-    let material_left = Rc::new(Dialectric::new(1.5));
-    let material_bubble = Rc::new(Dialectric::new(1.0/1.5));
-    let material_right = Rc::new(Metal::new(Color::filled_vector(0.8, 0.6, 0.2),1.0));
+    // let material_ground = Rc::new(Lambertian::new(Color::filled_vector(0.8, 0.8, 0.0)));
+    // let material_center = Rc::new(Lambertian::new(Color::filled_vector(0.1, 0.2, 0.5)));
+    // let material_left = Rc::new(Dialectric::new(1.5));
+    // let material_bubble = Rc::new(Dialectric::new(1.0/1.5));
+    // let material_right = Rc::new(Metal::new(Color::filled_vector(0.8, 0.6, 0.2),1.0));
 
-    world.add(Rc::new(Sphere::new(&Point3::filled_vector(0.0, 0.0, -1.2), 0.5,material_center)));
-    world.add(Rc::new(Sphere::new(&Point3::filled_vector(0.0, -100.5, -1.0), 100.0,material_ground)));
-    world.add(Rc::new(Sphere::new(&Point3::filled_vector(-1.0, 0.0, -1.0), 0.5,material_left)));
-    world.add(Rc::new(Sphere::new(&Point3::filled_vector(-1.0, 0.0, -1.0), 0.4,material_bubble)));
-    world.add(Rc::new(Sphere::new(&Point3::filled_vector(1.0, 0.0, -1.0), 0.5,material_right)));
+    // world.add(Rc::new(Sphere::new(&Point3::filled_vector(0.0, 0.0, -1.2), 0.5,material_center)));
+    // world.add(Rc::new(Sphere::new(&Point3::filled_vector(0.0, -100.5, -1.0), 100.0,material_ground)));
+    // world.add(Rc::new(Sphere::new(&Point3::filled_vector(-1.0, 0.0, -1.0), 0.5,material_left)));
+    // world.add(Rc::new(Sphere::new(&Point3::filled_vector(-1.0, 0.0, -1.0), 0.4,material_bubble)));
+    // world.add(Rc::new(Sphere::new(&Point3::filled_vector(1.0, 0.0, -1.0), 0.5,material_right)));
 
     // world.add(Rc::new(Sphere::new(&Point3::filled_vector(-R, 0.0, -1.0), R,material_left)));
     // world.add(Rc::new(Sphere::new(&Point3::filled_vector(R, 0.0, -1.0), R,material_right)));
 
+    let ground_material = Rc::new(Lambertian::new(Color::filled_vector(0.5, 0.5, 0.5)));
+    world.add(Rc::new(Sphere::new(&Point3::filled_vector(0.0, -1000.0, 0.0),1000.0,ground_material)));
 
-    let lookfrom = Point3::filled_vector(-2.0, 2.0, 1.0);
+    for a in -11..11{
+        for b in -11..11{
+            let choose_mat = random_double();
+            let center = Point3::filled_vector(a as f32 + 0.9*random_double(), 0.2, b as f32+0.9*random_double());
+
+            if (center.clone() - Point3::filled_vector(4.0, 0.2, 0.0)).length() > 0.9{
+                //let mut sphere_material = Rc::new(dyn Material);
+                if choose_mat < 0.8 {
+                    let albedo = Color::random() * Color::random();
+                    let sphere_material = Rc::new(Lambertian::new(albedo));
+                    world.add(Rc::new(Sphere::new(&center,0.2,sphere_material)));
+
+                }
+                else if choose_mat < 0.95 {
+                    let albedo = Color::random_ranged(0.5, 1.0);
+                    let fuzz = random_double_with_range(0.0, 0.5);
+                    let sphere_material = Rc::new(Metal::new(albedo,fuzz));
+                    world.add(Rc::new(Sphere::new(&center,0.2,sphere_material)));
+                }
+                else {
+                    let sphere_material = Rc::new(Dialectric::new(1.5));
+                    world.add(Rc::new(Sphere::new(&center,0.2,sphere_material)));
+                }
+            }
+        }
+    }
+
+    let material1 = Rc::new(Dialectric::new(1.5));
+    world.add(Rc::new(Sphere::new(&Point3::filled_vector(0.0, 1.0, 0.0), 1.0,material1)));
+
+    let material2 = Rc::new(Lambertian::new(Color::filled_vector(0.4, 0.2, 0.1)));
+    world.add(Rc::new(Sphere::new(&Point3::filled_vector(-4.0, 1.0, 0.0), 1.0,material2)));
+
+    let material3 = Rc::new(Metal::new(Point3::filled_vector(0.7, 0.6, 0.5),0.0));
+    world.add(Rc::new(Sphere::new(&Point3::filled_vector(4.0, 1.0, 0.0), 1.0,material3)));
+
+    let aspect_ratio = 16.0/9.0;
+
+    let image_width = 1200.0;
+
+    let sample_per_pixel = 500;
+
+    let max_depth = 50;
+
+    let vfov = 20.0;
+
+    let lookfrom = Point3::filled_vector(13.0, 2.0, 3.0);
     let lookat= Point3::filled_vector(0.0, 0.0, -1.0);
     let vup = Vec3::filled_vector(0.0, 1.0, 0.0);
 
-    let cam = Camera::initialize(16.0/9.0, 400.0,500, 20.0,lookfrom,lookat,vup);
+    let defocus_angle = 0.6;
+    let focus_dist = 10.0;
+
+    let cam = Camera::initialize(aspect_ratio, image_width,sample_per_pixel, vfov,max_depth,lookfrom,lookat,vup,defocus_angle,focus_dist);
 
     cam.render(&world);
     
