@@ -1,11 +1,14 @@
 //use env_logger::fmt::Color;
 //use env_logger::fmt::Color;
+//use env_logger::fmt::Color;
 use log::{info, set_boxed_logger, ParseLevelError};
 use std::ops::{Neg,AddAssign,MulAssign,DivAssign,Index,IndexMut,Add,Sub,Div,Mul};
-use std::fmt;
+use std::{fmt, vec};
 use std::rc::Rc;
 use rand::{random, Rng};
-use std::cmp::min;
+use std::cmp::{max, min};
+use std::thread;
+use std::sync::Arc;
 
 //use std::env;
 //use std::fs;
@@ -400,8 +403,10 @@ struct HitRecord{
     p:Point3,
     normal:Vec3,
     t:f32,
+    u:f32,
+    v:f32,
     front_face:bool,
-    mat: Rc<dyn Material>,
+    mat: Arc<dyn Material>,
 }
 
 impl HitRecord {
@@ -415,8 +420,10 @@ impl HitRecord {
         p:Point3::blank_vector(),
         normal:Vec3::blank_vector(),
         t:0.0,
+        u:0.0,
+        v: 0.0,
         front_face:false,
-        mat:Rc::new(BlankMaterial{})
+        mat:Arc::new(BlankMaterial{})
         }
     }
 }
@@ -427,6 +434,8 @@ impl Clone for HitRecord {
             p: self.p.clone(),
             normal:self.normal.clone(),
             t:self.t.clone(),
+            u: self.u.clone(),
+            v: self.v.clone(),
             front_face:self.front_face.clone(),
             mat:self.mat.clone()
         }
@@ -441,11 +450,11 @@ trait Hittable{
 struct Sphere{
     center: Point3,
     radius:f32,
-    mat: Rc<dyn Material>,
+    mat: Arc<dyn Material>,
 }
 
 impl Sphere{
-    pub fn new(center: &Point3,radius:f32,mat:Rc<dyn Material>)->Sphere{
+    pub fn new(center: &Point3,radius:f32,mat:Arc<dyn Material>)->Sphere{
         Sphere{
             center: center.clone(),
             radius: if 0.0 >  radius {0.0} else {radius},
@@ -500,8 +509,162 @@ impl Hittable for Sphere {
     }
 }
 
+struct Plane {
+    x:Interval,
+    y:Interval,
+    z:Interval,
+}
+
+// impl Plane {
+//     pub fn new(x: Interval, y:Interval, z:Interval)->Plane{
+//         Plane { x: x, y: y, z: z }
+//     }
+
+//     pub fn new_points(a:Point3, b:Point3)->Plane{
+//         let temp_plane = Plane { x: Interval { min: f32::min(a[0], b[0]), max: f32::max(a[0], b[0]) },
+//          y: Interval { min: f32::min(a[1], b[1]), max: f32::max(a[1], b[1]) },
+//           z: Interval { min: f32::min(a[2], b[2]), max: f32::max(a[2], b[2]) } }
+
+//         temp_plane.pad_to_minimums();
+
+//         temp_plane
+//     }
+
+
+
+//     fn pad_to_minimums(&self) {
+//         let delta = 0.0001;
+
+//         if(self.x.size() < delta) {
+//             x = x.expand(delta);
+//         }
+//     }
+// }
+
+
+struct Rectangle{
+    origin: Point3,
+    v_side: Vec3,
+    u_side: Vec3,
+
+    w: Vec3,
+    normal: Vec3,
+    d:f32,
+
+    mat: Arc<dyn Material>
+}
+
+impl Rectangle{
+    pub fn new(origin: Point3, v_side: Vec3, u_side: Vec3, mat:Arc<dyn Material>)->Rectangle{
+        let n = cross_product(&u_side,&v_side);
+        let norm = unit_vector(n.clone());
+
+        let d = dot_product(&norm, &origin);
+
+        let w = n.clone() / dot_product(&n, &n);
+        Rectangle{
+            origin: origin,
+            v_side: v_side,
+            u_side: u_side,
+            mat: mat,
+            w:w,
+            normal: norm,
+            d: d,
+        }
+    }
+
+    fn is_interior(a:&f32, b:&f32, rec: &mut HitRecord) ->bool {
+        let unit_interval = Interval::new(0.0, 1.0);
+
+
+        if !unit_interval.clone().contains(a) || !unit_interval.clone().contains(b) {
+            return false;
+        }
+
+        rec.u = a.clone();
+        rec.v = b.clone();
+        true
+    }
+    
+}
+
+impl Clone for Rectangle {
+fn clone(&self) -> Self {
+        Self {
+            origin:self.origin.clone(),
+            v_side:self.v_side.clone(),
+            u_side:self.u_side.clone(),
+            mat: self.mat.clone(),
+            w: self.w.clone(),
+            normal: self.normal.clone(),
+            d: self.d.clone(),
+            
+        }
+    }
+}
+
+impl Hittable for Rectangle {
+    fn hit(&self, r:&Ray,ray_t:Interval,rec:&mut HitRecord)->bool {
+
+        let denom = dot_product(&self.normal,&r.clone().direction());
+
+        if denom.abs() < 1e-8 {
+            return false;
+        }
+
+        let t = (self.d - dot_product(&self.normal, &r.clone().origin())) / denom;
+
+        if !ray_t.contains(&t) {
+            return false;
+        }
+
+        let intersection = r.clone().at(t);
+
+        let planar_hitpt_vector = intersection.clone()-self.origin.clone();
+        let alpha = dot_product(&self.w, &cross_product(&planar_hitpt_vector,&self.v_side));
+        let beta = dot_product(&self.w, &cross_product(&self.u_side,&planar_hitpt_vector));
+
+        if !Rectangle::is_interior(&alpha,&beta,rec) {
+            return false;
+        }
+
+
+
+        rec.t = t;
+        rec.p = intersection.clone();
+        rec.mat = self.mat.clone();
+        rec.set_face_normal(r, self.normal.clone());
+
+        true
+    }
+}
+
+
+#[inline(always)]
+pub fn init_box(a:Point3, b:Point3,mat:Arc<dyn Material>) -> HittableList{
+    let mut sides = HittableList::default();
+
+    let min = Point3::filled_vector(f32::min(a.x(), b.x()), f32::min(a.y(), b.y()), f32::min(a.z(), b.z()));
+    let max = Point3::filled_vector(f32::max(a.x(), b.x()), f32::max(a.y(), b.y()), f32::max(a.z(), b.z()));
+
+    let dx = Vec3::filled_vector(max.x() - min.x(), 0.0, 0.0);
+    let dy = Vec3::filled_vector(0.0, max.y() - min.y(), 0.0);
+    let dz = Vec3::filled_vector(0.0, 0.0, max.z() - min.z());
+
+    //world.add(Arc::new(Rectangle::new(Point3::filled_vector(555.0, 0.0, 0.0), Vec3::filled_vector(0.0, 555.0, 0.0), Vec3::filled_vector(0.0, 0.0, 555.0),green)));
+
+    sides.add(Arc::new(Rectangle::new(Point3::filled_vector(min.x(), min.y(), max.z()), dx.clone(), dy.clone(), mat.clone())));
+    sides.add(Arc::new(Rectangle::new(Point3::filled_vector(max.x(), min.y(), max.z()), -dz.clone(), dy.clone(), mat.clone())));
+    sides.add(Arc::new(Rectangle::new(Point3::filled_vector(max.x(), min.y(), min.z()), -dx.clone(), dy.clone(), mat.clone())));
+    sides.add(Arc::new(Rectangle::new(Point3::filled_vector(min.x(), min.y(), min.z()), dz.clone(), dy, mat.clone())));
+    sides.add(Arc::new(Rectangle::new(Point3::filled_vector(min.x(), max.y(), max.z()), dx.clone(), -dz.clone(), mat.clone())));
+    sides.add(Arc::new(Rectangle::new(Point3::filled_vector(min.x(), min.y(), min.z()), dx, dz, mat)));
+
+    sides
+}
+
 struct HittableList{
-    objects: Vec<Rc<dyn Hittable>>,
+    objects: Vec<Arc<dyn Hittable>>,
 }
 
 impl HittableList {
@@ -511,7 +674,7 @@ impl HittableList {
         }
     }
 
-    pub fn new(object: Rc<dyn Hittable>)->HittableList{
+    pub fn new(object: Arc<dyn Hittable>)->HittableList{
         HittableList{
             objects: vec![object],
         }
@@ -523,7 +686,7 @@ impl HittableList {
         self.objects.clear();
     }
 
-    pub fn add(&mut self, object: Rc<dyn Hittable>){
+    pub fn add(&mut self, object: Arc<dyn Hittable>){
         self.objects.push(object);
     }
 
@@ -593,6 +756,12 @@ impl Interval{
     const UNIVERSE: Interval = Interval{min:-INF,max:INF};
 }
 
+impl Clone for Interval{
+    fn clone(&self) -> Self {
+        Self { min: self.min.clone(), max: self.max.clone() }
+    }
+}
+
 #[inline(always)]
 fn linear_to_gamma(linear_component:f32)->f32{
     if linear_component > 0.0{
@@ -645,6 +814,8 @@ struct Camera{
 
     defocus_disk_u:Vec3,
     defocus_disk_v:Vec3,
+
+    background: Color,
 }
 
 impl Camera {
@@ -655,9 +826,19 @@ impl Camera {
 
 
     pub fn render(&self, world: &HittableList){
+
+        
+
+
+
         print!("P3\n{} {}\n255\n",self.image_width,self.image_height);
     
-        for j in 0..self.image_height{
+        
+            
+            
+            
+
+            for j in 0..self.image_height{
             info!("\rScanlines remaining: {} ",(self.image_height-j));
             for i in 0..self.image_width as u32{
 
@@ -673,12 +854,29 @@ impl Camera {
             }
             
         }
+
+
+       
+
+
+
+
+
+        
+
+        
+
+
+
+        
+
+
         info!("\rDone              \n");
     }
 
 
 
-    pub fn initialize(aspect_ratio:f32, image_width:f32,samples_per_pixel:u32,vfov:f32,max_depth:u32,lookfrom:Point3,lookat:Point3,vup:Vec3,defocus_angle:f32,focus_dist:f32)->Camera{
+    pub fn initialize(aspect_ratio:f32, image_width:f32,samples_per_pixel:u32,vfov:f32,max_depth:u32,lookfrom:Point3,lookat:Point3,vup:Vec3,defocus_angle:f32,focus_dist:f32,backgroud:Color)->Camera{
         //let vfov = 90.0;
         
 
@@ -760,6 +958,7 @@ impl Camera {
 
         defocus_disk_u:defocus_disk_u,
         defocus_disk_v:defocus_disk_v,
+        background:backgroud,
         }
     }
 
@@ -794,32 +993,41 @@ impl Camera {
 
         let mut rec:HitRecord = HitRecord::default();
 
-        if world.hit(r, Interval{min:0.001, max:INF}, &mut rec){
-            let mut scattered= Ray::blank_ray();
-            let mut attenuation= Color::blank_vector();
-            if rec.mat.scatter(&r,&rec,&mut attenuation,&mut scattered){
-                return attenuation * self.ray_color(&scattered, depth-1, world);
-            }
+        if !world.hit(r, Interval{min:0.001, max:INF}, &mut rec){
+            
             // let direction = rec.normal.clone() + random_on_hemisphere(&rec.normal);
             // return 0.5*(self.ray_color(&Ray::filled_ray(rec.p,direction),depth-1,&world));
-            return Color::blank_vector()
+            return self.background.clone();
         }
 
+        let mut scattered= Ray::blank_ray();
+        let mut attenuation= Color::blank_vector();
+       
 
+        let color_from_emission = rec.mat.emitted(rec.u, rec.v, &rec.p);
+
+        if !rec.mat.scatter(&r,&rec,&mut attenuation,&mut scattered){
+            return color_from_emission;
+        }
+        let color_from_scatter = attenuation * self.ray_color(&scattered, depth-1, world);
         // let t =  hit_sphere(&Point3::filled_vector(0.0, 0.0, -1.0), 0.5, r);
         // if t > 0.0 {
         //     let n: Vec3 = unit_vector(r.clone().at(t)-Vec3::filled_vector(0.0, 0.0, -1.0));
         //     return 0.5*Color::filled_vector(n.x()+1.0, n.y()+1.0, n.z()+1.0)
         // }
 
-        let unit_direction = unit_vector(r.clone().direction());
-        let a = 0.5*(unit_direction.y() + 1.0);
-        ((1.0-a)*Color::filled_vector(1.0, 1.0, 1.0)) + (a*Color::filled_vector(0.5, 0.7, 1.0))
+        // let unit_direction = unit_vector(r.clone().direction());
+        // let a = 0.5*(unit_direction.y() + 1.0);
+        // ((1.0-a)*Color::filled_vector(1.0, 1.0, 1.0)) + (a*Color::filled_vector(0.5, 0.7, 1.0))
+
+        color_from_emission + color_from_scatter
         }
 }
 
 trait Material{
     fn scatter(&self, r_in:&Ray,rec:&HitRecord,attenuation:&mut Color,scattered:&mut Ray)->bool;
+
+    fn emitted(&self, u: f32, v:f32, p: &Point3) -> Color;
 }
 
 // impl Material{
@@ -827,6 +1035,27 @@ trait Material{
 //     //     false
 //     // }
 // }
+
+struct Light {
+    value: Color
+}
+
+
+impl Light {
+    pub fn new(value:Color)->Light{
+        Light { value: value }
+    }
+}
+
+impl Material for Light {
+    fn emitted(&self, u: f32, v:f32, p: &Point3) -> Color {
+        self.value.clone()
+    }
+
+    fn scatter(&self, r_in:&Ray,rec:&HitRecord,attenuation:&mut Color,scattered:&mut Ray)->bool {
+        false
+    }
+}
 
 struct Lambertian{
     albedo:Color,
@@ -854,7 +1083,13 @@ impl Material for Lambertian {
         *attenuation = self.albedo.clone();
         true
     }
+
+    fn emitted(&self, u: f32, v:f32, p: &Point3) -> Color {
+        Point3::blank_vector()
+    }
 }
+
+
 
 struct BlankMaterial{
 
@@ -863,6 +1098,9 @@ struct BlankMaterial{
 impl Material for BlankMaterial {
     fn scatter(&self, _r_in:&Ray,_rec:&HitRecord,_attenuation:&mut Color,_scattered:&mut Ray)->bool {
         false
+    }
+    fn emitted(&self, u: f32, v:f32, p: &Point3) -> Color {
+        Point3::blank_vector()
     }
 }
 
@@ -895,6 +1133,9 @@ impl Material for Metal{
         *attenuation = self.albedo.clone();
         if dot_product(&scattered.clone().direction(), &rec.normal) > 0.0 {return true} else {return false}
         true
+    }
+    fn emitted(&self, u: f32, v:f32, p: &Point3) -> Color {
+        Point3::blank_vector()
     }
 }
 
@@ -944,6 +1185,10 @@ impl Material for Dialectric{
         true
 
     }
+
+    fn emitted(&self, u: f32, v:f32, p: &Point3) -> Color {
+        Point3::blank_vector()
+    }
 }
 
 fn main(){
@@ -971,67 +1216,161 @@ fn main(){
 
     // world.add(Rc::new(Sphere::new(&Point3::filled_vector(-R, 0.0, -1.0), R,material_left)));
     // world.add(Rc::new(Sphere::new(&Point3::filled_vector(R, 0.0, -1.0), R,material_right)));
+    //-----------------------------------------------------------------------------------------------------------------------------------------------------
+    // let ground_material = Rc::new(Lambertian::new(Color::filled_vector(0.5, 0.5, 0.5)));
+    // world.add(Rc::new(Sphere::new(&Point3::filled_vector(0.0, -1000.0, 0.0),1000.0,ground_material)));
 
-    let ground_material = Rc::new(Lambertian::new(Color::filled_vector(0.5, 0.5, 0.5)));
-    world.add(Rc::new(Sphere::new(&Point3::filled_vector(0.0, -1000.0, 0.0),1000.0,ground_material)));
+    // for a in -11..11{
+    //     for b in -11..11{
+    //         let choose_mat = random_double();
+    //         let center = Point3::filled_vector(a as f32 + 0.9*random_double(), 0.2, b as f32+0.9*random_double());
 
-    for a in -11..11{
-        for b in -11..11{
-            let choose_mat = random_double();
-            let center = Point3::filled_vector(a as f32 + 0.9*random_double(), 0.2, b as f32+0.9*random_double());
+    //         if (center.clone() - Point3::filled_vector(4.0, 0.2, 0.0)).length() > 0.9{
+    //             //let mut sphere_material = Rc::new(dyn Material);
+    //             if choose_mat < 0.8 {
+    //                 let albedo = Color::random() * Color::random();
+    //                 let sphere_material = Rc::new(Lambertian::new(albedo));
+    //                 world.add(Rc::new(Sphere::new(&center,0.2,sphere_material)));
 
-            if (center.clone() - Point3::filled_vector(4.0, 0.2, 0.0)).length() > 0.9{
-                //let mut sphere_material = Rc::new(dyn Material);
-                if choose_mat < 0.8 {
-                    let albedo = Color::random() * Color::random();
-                    let sphere_material = Rc::new(Lambertian::new(albedo));
-                    world.add(Rc::new(Sphere::new(&center,0.2,sphere_material)));
+    //             }
+    //             else if choose_mat < 0.95 {
+    //                 let albedo = Color::random_ranged(0.5, 1.0);
+    //                 let fuzz = random_double_with_range(0.0, 0.5);
+    //                 let sphere_material = Rc::new(Metal::new(albedo,fuzz));
+    //                 world.add(Rc::new(Sphere::new(&center,0.2,sphere_material)));
+    //             }
+    //             else {
+    //                 let sphere_material = Rc::new(Dialectric::new(1.5));
+    //                 world.add(Rc::new(Sphere::new(&center,0.2,sphere_material)));
+    //             }
+    //         }
+    //     }
+    // }
 
-                }
-                else if choose_mat < 0.95 {
-                    let albedo = Color::random_ranged(0.5, 1.0);
-                    let fuzz = random_double_with_range(0.0, 0.5);
-                    let sphere_material = Rc::new(Metal::new(albedo,fuzz));
-                    world.add(Rc::new(Sphere::new(&center,0.2,sphere_material)));
-                }
-                else {
-                    let sphere_material = Rc::new(Dialectric::new(1.5));
-                    world.add(Rc::new(Sphere::new(&center,0.2,sphere_material)));
-                }
-            }
-        }
-    }
+    // let material1 = Rc::new(Dialectric::new(1.5));
+    // world.add(Rc::new(Sphere::new(&Point3::filled_vector(0.0, 1.0, 0.0), 1.0,material1)));
 
-    let material1 = Rc::new(Dialectric::new(1.5));
-    world.add(Rc::new(Sphere::new(&Point3::filled_vector(0.0, 1.0, 0.0), 1.0,material1)));
+    // let material2 = Rc::new(Lambertian::new(Color::filled_vector(0.4, 0.2, 0.1)));
+    // world.add(Rc::new(Sphere::new(&Point3::filled_vector(-4.0, 1.0, 0.0), 1.0,material2)));
 
-    let material2 = Rc::new(Lambertian::new(Color::filled_vector(0.4, 0.2, 0.1)));
-    world.add(Rc::new(Sphere::new(&Point3::filled_vector(-4.0, 1.0, 0.0), 1.0,material2)));
+    // let material3 = Rc::new(Metal::new(Point3::filled_vector(0.7, 0.6, 0.5),0.0));
+    // world.add(Rc::new(Sphere::new(&Point3::filled_vector(4.0, 1.0, 0.0), 1.0,material3)));
 
-    let material3 = Rc::new(Metal::new(Point3::filled_vector(0.7, 0.6, 0.5),0.0));
-    world.add(Rc::new(Sphere::new(&Point3::filled_vector(4.0, 1.0, 0.0), 1.0,material3)));
+    // let aspect_ratio = 16.0/9.0;
 
-    let aspect_ratio = 16.0/9.0;
+    // let image_width = 1200.0;
 
-    let image_width = 1200.0;
+    // let sample_per_pixel = 500;
 
-    let sample_per_pixel = 500;
+    // let max_depth = 50;
+
+    // let vfov = 20.0;
+
+    // let lookfrom = Point3::filled_vector(13.0, 2.0, 3.0);
+    // let lookat= Point3::filled_vector(0.0, 0.0, -1.0);
+    // let vup = Vec3::filled_vector(0.0, 1.0, 0.0);
+
+    // let defocus_angle = 0.6;
+    // let focus_dist = 10.0;
+
+    // let cam = Camera::initialize(aspect_ratio, image_width,sample_per_pixel, vfov,max_depth,lookfrom,lookat,vup,defocus_angle,focus_dist);
+
+    // //----------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+    // let left_red = Arc::new(Lambertian::new(Color::filled_vector(1.0, 0.2, 0.2)));
+    // let back_green = Arc::new(Lambertian::new(Color::filled_vector(0.2, 1.0, 0.2)));
+    // let right_blue = Arc::new(Lambertian::new(Color::filled_vector(0.2, 0.2, 1.0)));
+    // let upper_orange = Arc::new(Lambertian::new(Color::filled_vector(1.0, 0.5, 0.0)));
+    // let lower_teal = Arc::new(Lambertian::new(Color::filled_vector(0.2, 0.8, 0.8)));   
+
+    // world.add(Arc::new(Rectangle::new(Point3::filled_vector(-3.0, -2.0, 5.0), Vec3::filled_vector(0.0, 0.0, -4.0), Vec3::filled_vector(0.0, 4.0, 0.0), left_red)));
+    // world.add(Arc::new(Rectangle::new(Point3::filled_vector(-2.0, -2.0, 0.0), Vec3::filled_vector(4.0, 0.0, 0.0), Vec3::filled_vector(0.0, 4.0, 0.0), back_green)));
+    // world.add(Arc::new(Rectangle::new(Point3::filled_vector(3.0, -2.0, 1.0), Vec3::filled_vector(0.0, 0.0, 4.0), Vec3::filled_vector(0.0, 4.0, 0.0), right_blue)));
+    // world.add(Arc::new(Rectangle::new(Point3::filled_vector(-2.0, 3.0, 1.0), Vec3::filled_vector(4.0, 0.0, 0.0), Vec3::filled_vector(0.0, 0.0, 4.0), upper_orange)));
+    // world.add(Arc::new(Rectangle::new(Point3::filled_vector(-2.0, -3.0, 5.0), Vec3::filled_vector(4.0, 0.0, 0.0), Vec3::filled_vector(0.0, 0.0, -4.0), lower_teal)));
+    
+    // let aspect_ratio = 1.0;
+
+    // let image_width = 400.0;
+
+    // let sample_per_pixel = 100;
+
+    // let max_depth = 50;
+
+    // let vfov = 80.0;
+
+    // let lookfrom = Point3::filled_vector(0.0, 0.0, 9.0);
+    // let lookat= Point3::filled_vector(0.0, 0.0, 0.0);
+
+    // let vup = Vec3::filled_vector(0.0, 1.0, 0.0);
+
+    // let defocus_angle = 0.0;
+    // let focus_dist = 10.0;
+
+    // let cam = Camera::initialize(aspect_ratio, image_width,sample_per_pixel, vfov,max_depth,lookfrom,lookat,vup,defocus_angle,focus_dist);
+
+    // cam.render(&world);
+    
+    //----------------------------------------------------------------------------- ^ basic box render ---------------------------------------------------------------
+
+    let red = Arc::new(Lambertian::new(Color::filled_vector(0.65, 0.05, 0.05)));
+    let white = Arc::new(Lambertian::new(Color::filled_vector(0.73, 0.73, 0.73)));
+    let green = Arc::new(Lambertian::new(Color::filled_vector(0.12, 0.45, 0.15)));
+    let light = Arc::new(Light::new(Color::filled_vector(15.0, 15.0, 15.0)));
+
+    // world.add(Arc::new(Sphere::new(&Point3::filled_vector(0.0, -1000.0, 0.0),1000.0,left_red.clone())));
+    // world.add(Arc::new(Sphere::new(&Point3::filled_vector(0.0, 2.0, 0.0),2.0,left_red)));
+
+    world.add(Arc::new(Rectangle::new(Point3::filled_vector(555.0, 0.0, 0.0), Vec3::filled_vector(0.0, 555.0, 0.0), Vec3::filled_vector(0.0, 0.0, 555.0),green)));
+    world.add(Arc::new(Rectangle::new(Point3::filled_vector(0.0, 0.0, 0.0), Vec3::filled_vector(0.0, 555.0, 0.0), Vec3::filled_vector(0.0, 0.0, 555.0),red)));
+    world.add(Arc::new(Rectangle::new(Point3::filled_vector(343.0, 554.0, 332.0), Vec3::filled_vector(-130.0, 0.0, 0.0), Vec3::filled_vector(0.0, 0.0, -105.0),light)));
+    
+    world.add(Arc::new(Rectangle::new(Point3::filled_vector(0.0, 0.0, 0.0), Vec3::filled_vector(555.0, 0.0, 0.0), Vec3::filled_vector(0.0, 0.0, 555.0),white.clone())));
+    world.add(Arc::new(Rectangle::new(Point3::filled_vector(555.0, 555.0, 555.0), Vec3::filled_vector(-555.0, 0.0, 0.0), Vec3::filled_vector(0.0, 0.0, -555.0),white.clone())));
+    world.add(Arc::new(Rectangle::new(Point3::filled_vector(0.0, 0.0, 555.0), Vec3::filled_vector(555.0, 0.0, 0.0), Vec3::filled_vector(0.0, 555.0, 0.0),white.clone())));
+    
+    
+    world.add(Arc::new(Rectangle::new(Point3::filled_vector(280.50, 0.0, 295.60), Vec3::filled_vector(159.45, 0.0, -44.71), Vec3::filled_vector(28.95, 0.0, 165.40), white.clone())));
+world.add(Arc::new(Rectangle::new(Point3::filled_vector(280.50, 330.0, 295.60), Vec3::filled_vector(159.45, 0.0, -44.71), Vec3::filled_vector(28.95, 0.0, 165.40), white.clone())));
+world.add(Arc::new(Rectangle::new(Point3::filled_vector(309.45, 0.0, 461.00), Vec3::filled_vector(159.45, 0.0, -44.71), Vec3::filled_vector(0.0, 330.0, 0.0), white.clone())));
+world.add(Arc::new(Rectangle::new(Point3::filled_vector(280.50, 0.0, 295.60), Vec3::filled_vector(159.45, 0.0, -44.71), Vec3::filled_vector(0.0, 330.0, 0.0), white.clone())));
+world.add(Arc::new(Rectangle::new(Point3::filled_vector(280.50, 0.0, 295.60), Vec3::filled_vector(28.95, 0.0, 165.40), Vec3::filled_vector(0.0, 330.0, 0.0), white.clone())));
+world.add(Arc::new(Rectangle::new(Point3::filled_vector(439.95, 0.0, 250.89), Vec3::filled_vector(28.95, 0.0, 165.40), Vec3::filled_vector(0.0, 330.0, 0.0), white.clone())));
+
+    //
+    world.add(Arc::new(Rectangle::new(Point3::filled_vector(130.00, 0.0, 65.00), Vec3::filled_vector(156.32, 0.0, 48.06), Vec3::filled_vector(-50.93, 0.0, 161.15), white.clone())));
+world.add(Arc::new(Rectangle::new(Point3::filled_vector(130.00, 165.0, 65.00), Vec3::filled_vector(156.32, 0.0, 48.06), Vec3::filled_vector(-50.93, 0.0, 161.15), white.clone())));
+world.add(Arc::new(Rectangle::new(Point3::filled_vector(79.07, 0.0, 226.15), Vec3::filled_vector(156.32, 0.0, 48.06), Vec3::filled_vector(0.0, 165.0, 0.0), white.clone())));
+world.add(Arc::new(Rectangle::new(Point3::filled_vector(130.00, 0.0, 65.00), Vec3::filled_vector(156.32, 0.0, 48.06), Vec3::filled_vector(0.0, 165.0, 0.0), white.clone())));
+world.add(Arc::new(Rectangle::new(Point3::filled_vector(130.00, 0.0, 65.00), Vec3::filled_vector(-50.93, 0.0, 161.15), Vec3::filled_vector(0.0, 165.0, 0.0), white.clone())));
+world.add(Arc::new(Rectangle::new(Point3::filled_vector(286.32, 0.0, 113.06), Vec3::filled_vector(-50.93, 0.0, 161.15), Vec3::filled_vector(0.0, 165.0, 0.0), white.clone())));
+
+    
+    
+
+    let aspect_ratio = 1.0;
+
+    let image_width = 600.0;
+
+    let sample_per_pixel = 10000;
 
     let max_depth = 50;
 
-    let vfov = 20.0;
+    let vfov = 40.0;
 
-    let lookfrom = Point3::filled_vector(13.0, 2.0, 3.0);
-    let lookat= Point3::filled_vector(0.0, 0.0, -1.0);
+    let lookfrom = Point3::filled_vector(278.0, 278.0, -800.0);
+    let lookat= Point3::filled_vector(278.0, 278.0, 0.0);
+
     let vup = Vec3::filled_vector(0.0, 1.0, 0.0);
 
-    let defocus_angle = 0.6;
+    let defocus_angle = 0.0;
     let focus_dist = 10.0;
 
-    let cam = Camera::initialize(aspect_ratio, image_width,sample_per_pixel, vfov,max_depth,lookfrom,lookat,vup,defocus_angle,focus_dist);
+    let background = Color::filled_vector(0.0, 0.0, 0.0);
+
+    let cam = Camera::initialize(aspect_ratio, image_width,sample_per_pixel, vfov,max_depth,lookfrom,lookat,vup,defocus_angle,focus_dist,background);
 
     cam.render(&world);
-    
 
     //let height = 256;
     //let width = 256;
